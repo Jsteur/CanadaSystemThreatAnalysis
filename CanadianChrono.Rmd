@@ -1,0 +1,309 @@
+---
+title: "Chrononormativity Canadian 2020 Analysis"
+author: "James Steur & Aleks Ksiazkiewicz"
+date: "01/24/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Load Packages & Data, echo=FALSE, include=FALSE, results=FALSE}
+#Load in Packages & Data
+library(haven)
+CES_2021_Alek_Module_weighted_final_2 <- read_dta("~/Desktop/CanadianAnalysis/CES 2021_Alek_Module_weighted_final_2.dta")
+canada <- CES_2021_Alek_Module_weighted_final_2
+library(readr)
+library('devtools')
+library('mirt')
+#install_github('philchalmers/mirt')
+library(dplyr)
+packageVersion("dplyr")
+library("ltm")
+library('mvtnorm')
+library(haven)
+library('stargazer')
+library('ggpubr')
+library(dplyr)
+library(car)
+library(Hmisc)
+library(effectsize)
+library(haven)
+library('naniar')
+```
+
+```{r, Data Cleaning, echo = FALSE, include=FALSE, results=FALSE}
+#Data Cleaning
+canada <- replace(canada, canada == -99, NA) #Replaces with NA values
+
+#Recode Chrononormativity & Sum Variable
+chrononormativity <- subset(canada,
+  select=c(cps21_Alex_Q4_1:cps21_Alex_Q4_17))
+chrononormativity[chrononormativity==2] <- 0 
+#There are proper or improper times of day to do this activity (1)
+#People should do this activity at whatever time of day suits them (0)
+canada$sum_normativity <- rowSums(chrononormativity)
+table(canada$sum_normativity)
+
+#Code Chronotype
+
+sleep1 <- subset(canada, select = c(cps21_Alek_Q1:cps21_Alek_Q3))
+sleep1$cps21_Alek_Q1 <- sleep1$cps21_Alek_Q1 + 20
+sleep1$cps21_Alek_Q3 <- sleep1$cps21_Alek_Q3/30
+sleep1$GenDuration <- (sleep1$cps21_Alek_Q1 - sleep1$cps21_Alek_Q2)
+
+sleep1$GenDuration <- with(sleep1, 
+  ifelse(GenDuration >= 48, GenDuration - 48, 
+  ifelse(GenDuration < 0, GenDuration + 48,
+  GenDuration)))
+
+sleep1$GenDuration[sleep1$GenDuration == 0] <- NA
+
+sleep1$cps21_Alek_Q3 <- with(sleep1,
+  ifelse(GenDuration - cps21_Alek_Q3 <= 0, NA, cps21_Alek_Q3))
+
+#Exclude Outliers on sleep1/wake times. 
+#UIL 303. Before 7PM = 1 or 2. After 6AM = 25 to 48.
+sleep1$cps21_Alek_Q2 <- with(sleep1,
+  ifelse(cps21_Alek_Q2 <= 2, NA, 
+  ifelse(cps21_Alek_Q2 >= 25, NA, 
+  cps21_Alek_Q2)))
+
+#UIL 302. Before 4AM = 21 or less. After 3PM = 43 to 48.
+sleep1$cps21_Alek_Q1 <- with(sleep1,
+  ifelse(cps21_Alek_Q1 <= 21, NA,
+  ifelse(cps21_Alek_Q1 >= 43, NA,
+  cps21_Alek_Q1)))
+
+#Remove sleep1ing fewer than 2 hours or more than 18 hours.
+sleep1$GenDuration <- with(sleep1,
+  ifelse(GenDuration <= 4, NA,
+  ifelse(GenDuration >= 36, NA,
+  GenDuration)))
+
+#Midpoint of free night sleep.
+sleep1$GenMfs <- sleep1$cps21_Alek_Q1 - (sleep1$GenDuration*0.5)
+
+sleep1$GenMfs <- (ifelse(sleep1$GenMfs > 48, sleep1$GenMfs - 48, sleep1$GenMfs))
+
+sleep1$delay <- sleep1$cps21_Alek_Q1 - (sleep1$GenDuration - sleep1$cps21_Alek_Q3)/2 
+sleep1$delay <- ifelse(sleep1$delay > 48, sleep1$delay-48, sleep1$delay)
+
+#Below 13 = Before Midnight. After 13 = After Midnight. Diving by two to get hourly unit. 
+sleep1$GenMfs <- (sleep1$GenMfs - 13)/2
+sleep1$delay <- (sleep1$delay - 13)/2
+
+#Use delay for analysis.
+canada$chronotype_delay <- sleep1$delay
+
+#3.5 is the median amount of midpoint sleep. 
+#3.5 or below = Morning. 1.
+#Higher than 3.5 = Evening. 2. 
+
+sleep1$bi_type <- with(sleep1,
+  ifelse(delay <= 3.5, 1, 
+  ifelse(delay > 3.5, 2,
+         delay)))
+
+canada$bi_type <- sleep1$bi_type
+canada$bi_type
+```
+
+```{r, Correlation & Regression Models, echo = FALSE, include=FALSE, results=FALSE}
+#Correlation Recode
+cor_frame <- subset(canada, select=c(cps21_lr_scale_bef_1, chronotype_delay, sum_normativity))
+names(cor_frame)[names(cor_frame) == "sum_normativity"] <- "Chrononormativity"
+names(cor_frame)[names(cor_frame) == "cps21_lr_scale_bef_1"] <- "Ideology"
+names(cor_frame)[names(cor_frame) == "chronotype_delay"] <- "Chronotype"
+canada$cps21_lr_scale_bef_1
+cor_frame1 <- rcorr(as.matrix(cor_frame))
+cor_frame1
+
+m1 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity, data = canada)
+m2 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity + chronotype_delay, data = canada)
+m3 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity + chronotype_delay + cps21_age, data = canada)
+m4 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity + chronotype_delay + cps21_age + cps21_genderid, data = canada)
+m5 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity + chronotype_delay + cps21_age + cps21_genderid + cps21_education, data = canada)
+m6 <- lm(cps21_lr_scale_bef_1 ~ sum_normativity + chronotype_delay + cps21_age + cps21_genderid + cps21_education + cps21_fed_id, data = canada)
+
+
+m7 <- lm(chronotype_delay ~ sum_normativity, data = canada)
+m8 <- lm(chronotype_delay ~ sum_normativity + cps21_lr_scale_bef_1, data = canada)
+m9 <- lm(chronotype_delay ~ sum_normativity + cps21_lr_scale_bef_1 + cps21_age, data = canada)
+m10 <- lm(chronotype_delay ~ sum_normativity + cps21_lr_scale_bef_1 + cps21_age + cps21_genderid, data = canada)
+m11 <- lm(chronotype_delay ~ sum_normativity + cps21_lr_scale_bef_1 + cps21_age + cps21_genderid + cps21_education, data = canada)
+m12 <- lm(chronotype_delay ~ sum_normativity + cps21_lr_scale_bef_1 + cps21_age + cps21_genderid + cps21_education + cps21_fed_id, data = canada)
+
+#The Canadian Study didn't measure race/ethnicity... so, that's that. 
+#canada$cps21_age #Age
+#canada$cps21_genderid #Gender
+#canada$cps21_education Education
+
+#canada$cps21_lr_scale_bef_1 #Self placement ideology.
+#canada$cps21_fed_id. Partisanship. Eight Different Parties. 
+table(canada$cps21_fed_id)
+```
+
+# Pearson Correlations
+
+Ideology, chronotype, and chrononormativity don't correlate strongly with one another. Correlations, on average around -1 or 1. All p-values are significant except for chrononormativity and ideology. Significant p-values are not unexpected given the large n-sizes. 
+```{r, Correlations Bivariate Regressions}
+cor_frame1
+```
+# Bivariate Regression Models
+
+There is not a significant p-value for the relationship between chrononormativity (IV) and ideology (DV). With controls included, chronotype, age, gender, and education are significant.
+
+There is a significant p-value for the relationship between chrononormativity (IV) and chronotype (DV). With controls included, ideology, age, and chrononormativity are significant. 
+
+Model 1 is a bivariage regression with chrononormativity as the IV and ideology as the DV.   
+Model 7 is a bivariate regression with chrononormativity as the IV and chronotype as the DV. 
+  
+The other models include all of the other controls: age, income, gender, and party. Model 6 also has chronotype as a control, and model 12 has ideology as a control.  
+
+*Variable Key*  
+sum_normativity is chrononormativity  
+chronotype_delay is chronotype  
+cps21_lr_scale_bef_1 is ideology  
+
+```{r, Bivariate Regressions}
+summary(m1) 
+summary(m6)
+summary(m7)
+summary(m12)
+```
+
+\newpage
+
+
+# Difference in Means
+
+Chronotype has a significant p-value in the analysis. Interestingly, it appears as though morning types were more likely to relax in the system affirming condition. 
+
+```{r, echo=FALSE, include=FALSE, results=FALSE}
+#Two Way Anova
+anova1 <- subset(canada, select=c(sum_normativity, Alek_module_condition, bi_type))
+anova1$Chrononormativity <- anova1$sum_normativity
+anova1$Chronotype <- anova1$bi_type
+anova1$Treatment <- anova1$Alek_module_condition
+
+anova1$Treatment <- factor(anova1$Treatment, 
+                  levels = c("C1_Control", "C2_System_threat", "C3_System_affirming"),
+                  labels = c("Control", "Threat", "Affirming"))
+
+anova1$Chronotype <- factor(anova1$Chronotype, 
+                  levels = c(1, 2),
+                  labels = c("Morning", "Evening"))
+
+group_by(anova1, Treatment, Chronotype) %>%
+  summarise(
+    count = n(),
+    mean = mean(Chrononormativity, na.rm = TRUE),
+    sd = sd(Chrononormativity, na.rm = TRUE)
+  )
+```
+
+```{r, echo=FALSE}
+group_by(anova1, Treatment, Chronotype) %>%
+  summarise(
+    count = n(),
+    mean = mean(Chrononormativity, na.rm = TRUE),
+    sd = sd(Chrononormativity, na.rm = TRUE)
+  )
+```
+
+
+\newpage
+Higher levels on the y-axis for chrononormativity reflect thinking there is a proper or improper time for certain activities. Lower scores indicate thinking there is not a proper or improper time for certain activities. 
+```{r, echo=FALSE, warning = FALSE}
+ggboxplot(anova1, x = "Treatment", y = "Chrononormativity", color = "Chronotype",
+          palette = c("#00AFBB", "#E7B800"))
+
+two.way <- aov(Chrononormativity ~ Treatment*Chronotype, data = anova1)
+summary(two.way)
+
+
+hist(canada$sum_normativity,
+     main = "Chrononormativity Responses",
+     xlim = c(0,20),
+     ylim = c(0,600),
+     xlab = "Chrononormativity", 
+     col = "blue")
+
+my_anova1 <- aov(Chrononormativity ~ Treatment*Chronotype, data = anova1)
+#imbalance <- Anova(my_anova, type = "III")
+
+summary(my_anova1)
+Anova(two.way, type = "III")
+```
+\newpage
+
+
+# IRT
+
+All items except number 16 discriminate with values over 1.
+
+All of the items also fit the model.
+
+The last three items are capturing the most variation in terms of people. That is, more extreme ends of the curve/middle of the curve are captured.
+
+Test Information Curve is capturing roughly 1 standard deviation above the norm on all items. (The Item Characteristic Curves are included for all items. The first graph represents item 1, the second graph represents item 2, etc.)
+```{r, IRT, echo=FALSE}
+#2PL Binary IRT. #Norm_sum is the subset of the chrononormativity items. 
+BinModel1 <- ltm(chrononormativity ~ z1, IRT.param = T) #2PL model. 
+#summary(BinModel1) #Difficulty, Discrimination, & EFA
+#coef(BinModel1, IRTpars = T) #Coefficients
+coef(BinModel1) #Nicely Formatted Difficulty & Discrimination
+item.fit(BinModel1)
+
+plot(BinModel1, type = "IIC", items = 0) #Test Information Function
+
+#Item Characteristic Curve of All Items
+plot(BinModel1, type = "ICC", items = 1)
+plot(BinModel1, type = "ICC", items = 2)
+plot(BinModel1, type = "ICC", items = 3)
+plot(BinModel1, type = "ICC", items = 4)
+plot(BinModel1, type = "ICC", items = 5)
+plot(BinModel1, type = "ICC", items = 6)
+plot(BinModel1, type = "ICC", items = 7)
+plot(BinModel1, type = "ICC", items = 8)
+plot(BinModel1, type = "ICC", items = 9)
+plot(BinModel1, type = "ICC", items = 10)
+plot(BinModel1, type = "ICC", items = 11)
+plot(BinModel1, type = "ICC", items = 12)
+plot(BinModel1, type = "ICC", items = 13)
+plot(BinModel1, type = "ICC", items = 14)
+plot(BinModel1, type = "ICC", items = 15)
+plot(BinModel1, type = "ICC", items = 16)
+plot(BinModel1, type = "ICC", items = 17)
+
+#plot(BinModel1, type = "ICC") #All items at once
+#plot(BinModel1, type = "ICC", items = 3)
+
+
+#Factor_Scores <- factor.scores(BinModel1) 
+#See Frequency of How Often People Select
+
+#person.fit(BinModel1)
+```
+
+```{r, Key Variables, echo = FALSE, include=FALSE, results=FALSE}
+#Exploratory Analyses: Territory & Religion. 
+
+#canada$Alek_module_condition #Treatment Condition. 1 = Control. 2 = Threat. 3 = Affirming.
+#canada$cps21_Alek_Q1 # Free Days.
+#canada$cps21_Alek_Q2 # Nights
+#canada$cps21_Alek_Q3 #Minutes before sleep
+#canada$cps21_Alex_Q4_1 #1-17 is chrononormativity scale.
+#canada$cps21_age #Age
+#canada$cps21_genderid #Gender
+#canada$cps21_education Education
+
+#canada$cps21_lr_scale_bef_1 #Self placement ideology.
+#canada$cps21_fed_id. Partisanship. Eight Different Parties. 
+
+#table(canada$cps21_data_quality) #Address poor quality responses in data. Include poor respondents with analysis and exclude them to see if differences arise in analysis. 
+```
+
